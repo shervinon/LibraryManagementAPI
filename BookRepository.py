@@ -45,12 +45,6 @@ def get_book_availability(book_id):
         return jsonify({'is_borrowed': book['is_borrowed']}), 200
     else:
         return jsonify({'error': 'Not Found'}), 404
-
-@app.route('/users/<int:user_id>/borrowed_books', methods=['GET'])
-def get_borrowed_books(user_id):
-    cursor.execute("SELECT * FROM books WHERE borrowed_by = %s", (user_id,))
-    borrowed_books = cursor.fetchall()
-    return jsonify(borrowed_books), 200
 # Post Methods (Books)
 @app.route('/books', methods=['POST'])
 def add_book():
@@ -60,26 +54,6 @@ def add_book():
     db.commit()
     book_data['id'] = cursor.lastrowid
     return jsonify(book_data), 201
-# Put Methods (Books)
-@app.route('/books/<int:book_id>', methods=['PUT'])
-def update_book(book_id):
-    update_data = request.get_json()
-    cursor.execute("UPDATE books SET title = %s, author = %s WHERE id = %s",
-                   (update_data.get('title'), update_data.get('author'), book_id))
-    db.commit()
-    cursor.execute("SELECT * FROM books WHERE id = %s", (book_id,))
-    updated_book = cursor.fetchone()
-    if updated_book:
-        return jsonify(updated_book), 200
-    else:
-        return jsonify({'error': 'Not Found'}), 404
-# Delete Methods (Books)
-@app.route('/books/<int:book_id>', methods=['DELETE'])
-def delete_book(book_id):
-    cursor.execute("DELETE FROM books WHERE id = %s", (book_id,))
-    db.commit()
-    return '', 204
-# Post Methods (Books)
 @app.route('/books/<int:book_id>/borrow', methods=['POST'])
 def borrow_book(book_id):
     borrow_info = request.get_json()
@@ -107,8 +81,20 @@ def return_book(book_id):
         updated_book = cursor.fetchone()
         return jsonify(updated_book), 200
     else:
-        return jsonify({'error': 'Book not found or not borrowed by this user'}), 404
-
+        return jsonify({'error': 'Book not found or not bo0rrowed by this user'}), 404
+# Put Methods (Books)
+@app.route('/books/<int:book_id>', methods=['PUT'])
+def update_book(book_id):
+    update_data = request.get_json()
+    cursor.execute("UPDATE books SET title = %s, author = %s WHERE id = %s",
+                   (update_data.get('title'), update_data.get('author'), book_id))
+    db.commit()
+    cursor.execute("SELECT * FROM books WHERE id = %s", (book_id,))
+    updated_book = cursor.fetchone()
+    if updated_book:
+        return jsonify(updated_book), 200
+    else:
+        return jsonify({'error': 'Not Found'}), 404
 @app.route('/books/<int:old_id>/change_id/<int:new_id>', methods=['PUT'])
 def change_book_id(old_id, new_id):
     cursor.execute("SELECT * FROM books WHERE id = %s", (old_id,))
@@ -126,6 +112,12 @@ def change_book_id(old_id, new_id):
             return jsonify(updated_book), 200
     else:
         return jsonify({'error': 'Book not found'}), 404
+# Delete Methods (Books)
+@app.route('/books/<int:book_id>', methods=['DELETE'])
+def delete_book(book_id):
+    cursor.execute("DELETE FROM books WHERE id = %s", (book_id,))
+    db.commit()
+    return '', 204
 # User Management
 # Get Methods (Users)
 @app.route('/users', methods=['Get'])
@@ -142,6 +134,11 @@ def get_user_by_id(user_id):
         return jsonify(user), 200
     else:
         return jsonify({'error': 'Not Found'}), 404
+@app.route('/users/<int:user_id>/borrowed_books', methods=['GET'])
+def get_borrowed_books(user_id):
+    cursor.execute("SELECT * FROM books WHERE borrowed_by = %s", (user_id,))
+    borrowed_books = cursor.fetchall()
+    return jsonify(borrowed_books), 200
 # Post Methods (Users)
 @app.route('/users', methods=['POST'])
 def add_user():
