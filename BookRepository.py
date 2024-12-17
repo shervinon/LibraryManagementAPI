@@ -1,183 +1,172 @@
-from http.server import BaseHTTPRequestHandler, HTTPServer
-import json
-import urllib
+from flask import Flask, request, jsonify
+import mysql.connector
 
-# In-memory database
-books = []
-users = []
+app = Flask(__name__)
 
-class LibraryHTTPRequestHandler(BaseHTTPRequestHandler):
-    def _set_response(self, status=200, content_type='application/json'):
-        self.send_response(status)
-        self.send_header('Content-type', content_type)
-        self.end_headers()
+db = mysql.connector.connect(
+    host = "localhost",
+    user = "root",
+    password = "localsql4030",
+    database = "library")
 
-    def do_GET(self):
-        parsed_path = urllib.parse.urlparse(self.path)
-        path_parts = parsed_path.path.split('/')[1:]
+cursor = db.cursor(dictionary=True)
 
-        if len(path_parts) == 1 and path_parts[0] == 'books':
-            self._get_all_books()
-        elif len(path_parts) == 2 and path_parts[0] == 'books' and path_parts[1] == 'available':
-            self._get_available_books()
-        elif len(path_parts) == 2 and path_parts[0] == 'books':
-            self._get_book_by_id(int(path_parts[1]))
-        elif len(path_parts) == 3 and path_parts[0] == 'books' and path_parts[2] == 'availability':
-            self._get_book_availability(int(path_parts[1]))
-        elif len(path_parts) == 3 and path_parts[0] == 'users' and path_parts[2] == 'borrowed_books':
-            self._get_borrowed_books(int(path_parts[1]))
+@app.route('/')
+def index():
+    return "Welcome to the Library API", 200
+# Book Management
+# Get Methods (Books)
+@app.route('/books', methods=['GET'])
+def get_all_books():
+    cursor.execute("SELECT * FROM books")
+    books = cursor.fetchall()
+    return jsonify(books), 200
+
+@app.route('/books/available', methods=['GET'])
+def get_available_books():
+    cursor.execute("SELECT * FROM books WHERE is_borrowed = FALSE")
+    available_books = cursor.fetchall()
+    return jsonify(available_books), 200
+
+@app.route('/books/<int:book_id>', methods=['GET'])
+def get_book_by_id(book_id):
+    cursor.execute("SELECT * FROM books WHERE id = %s", (book_id,))
+    book = cursor.fetchone()
+    if book:
+        return jsonify(book), 200
+    else:
+        return jsonify({'error': 'Not Found'}), 404
+
+@app.route('/books/<int:book_id>/availability', methods=['GET'])
+def get_book_availability(book_id):
+    cursor.execute("SELECT is_borrowed FROM books WHERE id = %s", (book_id,))
+    book = cursor.fetchone()
+    if book:
+        return jsonify({'is_borrowed': book['is_borrowed']}), 200
+    else:
+        return jsonify({'error': 'Not Found'}), 404
+# Post Methods (Books)
+@app.route('/books', methods=['POST'])
+def add_book():
+    book_data = request.get_json()
+    cursor.execute("INSERT INTO books (title, author) VALUES (%s, %s)", 
+                   (book_data['title'], book_data['author']))
+    db.commit()
+    book_data['id'] = cursor.lastrowid
+    return jsonify(book_data), 201
+@app.route('/books/<int:book_id>/borrow', methods=['POST'])
+def borrow_book(book_id):
+    borrow_info = request.get_json()
+    cursor.execute("SELECT * FROM books WHERE id = %s AND is_borrowed = FALSE", (book_id,))
+    book = cursor.fetchone()
+    if book:
+        cursor.execute("UPDATE books SET is_borrowed = TRUE, borrowed_by = %s WHERE id = %s",
+                       (borrow_info['user_id'], book_id))
+        db.commit()
+        cursor.execute("SELECT * FROM books WHERE id = %s", (book_id,))
+        updated_book = cursor.fetchone()
+        return jsonify(updated_book), 200
+    else:
+        return jsonify({'error': 'Book not found or already borrowed'}), 404
+
+@app.route('/books/<int:book_id>/return', methods=['POST'])
+def return_book(book_id):
+    return_info = request.get_json()
+    cursor.execute("SELECT * FROM books WHERE id = %s AND is_borrowed = TRUE", (book_id,))
+    book = cursor.fetchone()
+    if book and book['borrowed_by'] == return_info['user_id']:
+        cursor.execute("UPDATE books SET is_borrowed = FALSE, borrowed_by = NULL WHERE id = %s", (book_id,))
+        db.commit()
+        cursor.execute("SELECT * FROM books WHERE id = %s", (book_id,))
+        updated_book = cursor.fetchone()
+        return jsonify(updated_book), 200
+    else:
+        return jsonify({'error': 'Book not found or not bo0rrowed by this user'}), 404
+# Put Methods (Books)
+@app.route('/books/<int:book_id>', methods=['PUT'])
+def update_book(book_id):
+    update_data = request.get_json()
+    cursor.execute("UPDATE books SET title = %s, author = %s WHERE id = %s",
+                   (update_data.get('title'), update_data.get('author'), book_id))
+    db.commit()
+    cursor.execute("SELECT * FROM books WHERE id = %s", (book_id,))
+    updated_book = cursor.fetchone()
+    if updated_book:
+        return jsonify(updated_book), 200
+    else:
+        return jsonify({'error': 'Not Found'}), 404
+@app.route('/books/<int:old_id>/change_id/<int:new_id>', methods=['PUT'])
+def change_book_id(old_id, new_id):
+    cursor.execute("SELECT * FROM books WHERE id = %s", (old_id,))
+    book = cursor.fetchone()
+    if book:
+        cursor.execute("SELECT * FROM books WHERE id = %s", (new_id,))
+        new_id_exists = cursor.fetchone()
+        if new_id_exists:
+            return jsonify({'error': 'New ID already exists'}), 400
         else:
-            self._set_response(404)
-            self.wfile.write(json.dumps({'error': 'Not Found'}).encode('utf-8'))
+            cursor.execute("UPDATE books SET id = %s WHERE id = %s", (new_id, old_id))
+            db.commit()
+            cursor.execute("SELECT * FROM books WHERE id = %s", (new_id,))
+            updated_book = cursor.fetchone()
+            return jsonify(updated_book), 200
+    else:
+        return jsonify({'error': 'Book not found'}), 404
+# Delete Methods (Books)
+@app.route('/books/<int:book_id>', methods=['DELETE'])
+def delete_book(book_id):
+    cursor.execute("DELETE FROM books WHERE id = %s", (book_id,))
+    db.commit()
+    return '', 204
+# User Management
+# Get Methods (Users)
+@app.route('/users', methods=['Get'])
+def get_all_users():
+    cursor.execute("SELECT * FROM users")
+    users = cursor.fetchall()
+    return jsonify(users), 200
 
-    def do_POST(self):
-        parsed_path = urllib.parse.urlparse(self.path)
-        path_parts = parsed_path.path.split('/')[1:]
+@app.route('/users/<int:user_id>', methods=['GET'])
+def get_user_by_id(user_id):
+    cursor.execute("SELECT * FROM users WHERE id = %s", (user_id,))
+    user = cursor.fetchone()
+    if user:
+        return jsonify(user), 200
+    else:
+        return jsonify({'error': 'Not Found'}), 404
+@app.route('/users/<int:user_id>/borrowed_books', methods=['GET'])
+def get_borrowed_books(user_id):
+    cursor.execute("SELECT * FROM books WHERE borrowed_by = %s", (user_id,))
+    borrowed_books = cursor.fetchall()
+    return jsonify(borrowed_books), 200
+# Post Methods (Users)
+@app.route('/users', methods=['POST'])
+def add_user():
+    user_data = request.get_json()
+    cursor.execute("INSERT INTO users (name) VALUES (%s)", (user_data['name'],))
+    db.commit()
+    user_data['id'] = cursor.lastrowid
+    return jsonify(user_data), 201
+# Put Methods (Users)
+@app.route('/users/<int:user_id>', methods=['PUT'])
+def update_user(user_id):
+    update_data = request.get_json()
+    cursor.execute("UPDATE users SET name = %s WHERE id = %s", 
+                   (update_data.get('name'), user_id))
+    db.commit()
+    cursor.execute("SELECT * FROM users WHERE id = %s", (user_id,))
+    updated_user = cursor.fetchone()
+    if updated_user:
+        return jsonify(updated_user), 200
+    else:
+        return jsonify({'error': 'Not Found'}), 404
+# Delete Methods (Users)
+@app.route('/users/<int:user_id>', methods=['DELETE'])
+def delete_user(user_id):
+    cursor.execute("DELETE FROM users WHERE id = %s", (user_id,))
+    db.commit()
+    return '', 204
 
-        if len(path_parts) == 1 and path_parts[0] == 'books':
-            self._add_book()
-        elif len(path_parts) == 3 and path_parts[0] == 'books' and path_parts[2] == 'borrow':
-            self._borrow_book(int(path_parts[1]))
-        elif len(path_parts) == 3 and path_parts[0] == 'books' and path_parts[2] == 'return':
-            self._return_book(int(path_parts[1]))
-        else:
-            self._set_response(404)
-            self.wfile.write(json.dumps({'error': 'Not Found'}).encode('utf-8'))
+if __name__ == '__main__':
+    app.run(port=2831, debug=True)
 
-    def do_PUT(self):
-        parsed_path = urllib.parse.urlparse(self.path)
-        path_parts = parsed_path.path.split('/')[1:]
-
-        if len(path_parts) == 2 and path_parts[0] == 'books':
-            self._update_book(int(path_parts[1]))
-        elif len(path_parts) == 3 and path_parts[0] == 'books' and path_parts[2] == 'change_id':
-            self._change_book_id(int(path_parts[1]))
-        else:
-            self._set_response(404)
-            self.wfile.write(json.dumps({'error': 'Not Found'}).encode('utf-8'))
-
-    def do_DELETE(self):
-        parsed_path = urllib.parse.urlparse(self.path)
-        path_parts = parsed_path.path.split('/')[1:]
-
-        if len(path_parts) == 2 and path_parts[0] == 'books':
-            self._delete_book(int(path_parts[1]))
-        else:
-            self._set_response(404)
-            self.wfile.write(json.dumps({'error': 'Not Found'}).encode('utf-8'))
-
-    def _get_all_books(self):
-        self._set_response()
-        self.wfile.write(json.dumps(books).encode('utf-8'))
-
-    def _get_available_books(self):
-        available_books = [book for book in books if not book['is_borrowed']]
-        self._set_response()
-        self.wfile.write(json.dumps(available_books).encode('utf-8'))
-
-    def _get_book_by_id(self, book_id):
-        book = next((book for book in books if book['id'] == book_id), None)
-        if book:
-            self._set_response()
-            self.wfile.write(json.dumps(book).encode('utf-8'))
-        else:
-            self._set_response(404)
-            self.wfile.write(json.dumps({'error': 'Not Found'}).encode('utf-8'))
-
-    def _get_book_availability(self, book_id):
-        book = next((book for book in books if book['id'] == book_id), None)
-        if book:
-            self._set_response()
-            self.wfile.write(json.dumps({'is_borrowed': book['is_borrowed']}).encode('utf-8'))
-        else:
-            self._set_response(404)
-            self.wfile.write(json.dumps({'error': 'Not Found'}).encode('utf-8'))
-
-    def _get_borrowed_books(self, user_id):
-        borrowed_books = [book for book in books if book.get('borrowed_by') == user_id]
-        self._set_response()
-        self.wfile.write(json.dumps(borrowed_books).encode('utf-8'))
-
-    def _add_book(self):
-        content_length = int(self.headers['Content-Length'])
-        post_data = self.rfile.read(content_length)
-        book = json.loads(post_data)
-        book['id'] = len(books) + 1
-        book['is_borrowed'] = False
-        books.append(book)
-        self._set_response(201)
-        self.wfile.write(json.dumps(book).encode('utf-8'))
-
-    def _update_book(self, book_id):
-        book = next((book for book in books if book['id'] == book_id), None)
-        if book:
-            content_length = int(self.headers['Content-Length'])
-            put_data = self.rfile.read(content_length)
-            update_data = json.loads(put_data)
-            book.update(update_data)
-            self._set_response()
-            self.wfile.write(json.dumps(book).encode('utf-8'))
-        else:
-            self._set_response(404)
-            self.wfile.write(json.dumps({'error': 'Not Found'}).encode('utf-8'))
-
-    def _delete_book(self, book_id):
-        global books
-        books = [book for book in books if book['id'] != book_id]
-        self._set_response(204)
-        self.wfile.write(b'')
-
-    def _borrow_book(self, book_id):
-        book = next((book for book in books if book['id'] == book_id), None)
-        if book and not book['is_borrowed']:
-            content_length = int(self.headers['Content-Length'])
-            post_data = self.rfile.read(content_length)
-            borrow_info = json.loads(post_data)
-            book['is_borrowed'] = True
-            book['borrowed_by'] = borrow_info['user_id']
-            self._set_response()
-            self.wfile.write(json.dumps(book).encode('utf-8'))
-        else:
-            self._set_response(404)
-            self.wfile.write(json.dumps({'error': 'Book not found or already borrowed'}).encode('utf-8'))
-
-    def _return_book(self, book_id):
-        book = next((book for book in books if book['id'] == book_id), None)
-        if book and book['is_borrowed']:
-            content_length = int(self.headers['Content-Length'])
-            post_data = self.rfile.read(content_length)
-            return_info = json.loads(post_data)
-            if book['borrowed_by'] == return_info['user_id']:
-                book['is_borrowed'] = False
-                del book['borrowed_by']
-                self._set_response()
-                self.wfile.write(json.dumps(book).encode('utf-8'))
-            else:
-                self._set_response(403)
-                self.wfile.write(json.dumps({'error': 'Book was not borrowed by this user'}).encode('utf-8'))
-        else:
-            self._set_response(404)
-            self.wfile.write(json.dumps({'error': 'Book not found or not borrowed'}).encode('utf-8'))
-
-    def _change_book_id(self, old_id, new_id):
-        book = next((book for book in books if book['id'] == old_id), None)
-        if book:
-            if any(book['id'] == new_id for book in books):
-                self._set_response(400)
-                self.wfile.write(json.dumps({'error': 'New ID already exists'}).encode('utf-8'))
-            else:
-                book['id'] = new_id
-                self._set_response()
-                self.wfile.write(json.dumps(book).encode('utf-8'))
-        else:
-            self._set_response(404)
-            self.wfile.write(json.dumps({'error': 'Book not found'}).encode('utf-8'))
-
-def run(server_class=HTTPServer, handler_class=LibraryHTTPRequestHandler, port=2831):
-    server_address = ('', port)
-    httpd = server_class(server_address, handler_class)
-    print(f'Starting httpd server on port {port}')
-    httpd.serve_forever()
-
-if __name__ == "__main__":
-    run()
